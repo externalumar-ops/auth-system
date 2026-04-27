@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // =====================
-// DATABASE
+// DB
 // =====================
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log("MongoDB Connected"))
@@ -35,182 +35,60 @@ const plans = {
 };
 
 // =====================
-// FRONTEND
+// TRUSTED SMS INPUT (FROM FORWARDER)
 // =====================
-app.get("/", (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-  <title>XOUNNET</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+// Expected format from SMS forwarder:
+// {
+//   message: "PAID 500 4404970 2567XXXXXXX"
+// }
 
-  <style>
-    body {
-      margin:0;
-      font-family: Arial;
-      background: linear-gradient(120deg,#0f2027,#203a43,#2c5364);
-      color:white;
-      text-align:center;
-    }
+app.post("/sms", async (req, res) => {
+  const { message } = req.body;
 
-    .box {
-      max-width:400px;
-      margin:auto;
-      padding:20px;
-    }
+  if (!message) return res.json({ status: "no message" });
 
-    .card {
-      background: rgba(255,255,255,0.1);
-      padding:15px;
-      margin:15px 0;
-      border-radius:10px;
-    }
+  const text = message.toLowerCase();
 
-    button {
-      width:100%;
-      padding:12px;
-      margin:6px 0;
-      border:none;
-      border-radius:8px;
-      background:#00c853;
-      color:white;
-      font-size:15px;
-    }
+  // MUST contain merchant code
+  if (!text.includes("4404970")) {
+    return res.json({ status: "ignored" });
+  }
 
-    .plan {
-      background:#ff9800;
-    }
+  // detect amount
+  let amount = 0;
+  if (text.includes("500")) amount = 500;
+  if (text.includes("1000")) amount = 1000;
+  if (text.includes("2500")) amount = 2500;
+  if (text.includes("4000")) amount = 4000;
 
-    input {
-      width:90%;
-      padding:12px;
-      border:none;
-      border-radius:8px;
-      margin:6px 0;
-      text-align:center;
-    }
-  </style>
-</head>
+  if (!amount) {
+    return res.json({ status: "invalid amount" });
+  }
 
-<body>
+  // extract phone (256 format)
+  const phoneMatch = message.match(/256\d{8}/);
+  const phone = phoneMatch ? phoneMatch[0] : "unknown";
 
-<div class="box">
-
-  <h1>XOUNNET</h1>
-  <p>Built for connection</p>
-
-  <!-- STEP 1 -->
-  <div class="card" id="step1">
-    <h3>Select Package</h3>
-
-    <button class="plan" onclick="select(500,'3 Hours')">3 Hours - 500</button>
-    <button class="plan" onclick="select(1000,'24 Hours')">24 Hours - 1000</button>
-    <button class="plan" onclick="select(2500,'3 Days')">3 Days - 2500</button>
-    <button class="plan" onclick="select(4000,'7 Days')">7 Days - 4000</button>
-  </div>
-
-  <!-- STEP 2 -->
-  <div class="card" id="step2" style="display:none">
-    <h3>Payment</h3>
-    <p>Send money to:</p>
-    <b>Airtel / MTN: 4404970</b>
-
-    <p id="planText"></p>
-
-    <input id="phone" placeholder="Phone used to pay">
-
-    <button onclick="createVoucher()">Confirm Payment</button>
-  </div>
-
-  <!-- STEP 3 -->
-  <div class="card" id="step3" style="display:none">
-    <h3>Your Voucher</h3>
-    <p id="voucherText"></p>
-
-    <input id="voucher" placeholder="Enter voucher">
-
-    <button onclick="redeem()">Connect</button>
-  </div>
-
-  <p id="msg"></p>
-
-</div>
-
-<script>
-let amount = 0;
-let name = "";
-
-function select(a,n){
-  amount = a;
-  name = n;
-
-  document.getElementById("step1").style.display="none";
-  document.getElementById("step2").style.display="block";
-
-  document.getElementById("planText").innerText = n + " - " + a;
-}
-
-function createVoucher(){
-  fetch("/create",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      amount: amount,
-      phone: document.getElementById("phone").value
-    })
-  })
-  .then(r=>r.json())
-  .then(d=>{
-    document.getElementById("step2").style.display="none";
-    document.getElementById("step3").style.display="block";
-
-    document.getElementById("voucherText").innerText = d.code;
-    msg.innerText = "Voucher created";
-  });
-}
-
-function redeem(){
-  fetch("/redeem",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({code: voucher.value})
-  })
-  .then(r=>r.json())
-  .then(d=>{
-    msg.innerText = d.message;
-  });
-}
-</script>
-
-</body>
-</html>
-  `);
-});
-
-// =====================
-// CREATE VOUCHER
-// =====================
-app.post("/create", async (req, res) => {
-  const { amount, phone } = req.body;
-
-  const duration = plans[amount];
-  if (!duration) return res.json({ message: "Invalid plan" });
-
+  // generate voucher
   const code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
   await Voucher.create({
     code,
     phone,
     amount,
-    expiry: new Date(Date.now() + duration)
+    expiry: new Date(Date.now() + plans[amount])
   });
 
-  res.json({ code });
+  return res.json({
+    status: "voucher created",
+    code,
+    amount,
+    phone
+  });
 });
 
 // =====================
-// REDEEM
+// REDEEM VOUCHER (HOTSPOT LOGIN ENTRY POINT)
 // =====================
 app.post("/redeem", async (req, res) => {
   const { code } = req.body;
@@ -220,15 +98,34 @@ app.post("/redeem", async (req, res) => {
   if (!voucher) return res.json({ message: "Invalid voucher" });
   if (voucher.used) return res.json({ message: "Already used" });
   if (new Date() > voucher.expiry)
-    return res.json({ message: "Expired" });
+    return res.json({ message: "Expired voucher" });
 
   voucher.used = true;
   await voucher.save();
 
-  res.json({ message: "Access granted 🚀" });
+  return res.json({
+    message: "Access granted",
+    plan: voucher.amount,
+    user: voucher.phone
+  });
+});
+
+// =====================
+// ADMIN VIEW (OPTIONAL)
+// =====================
+app.get("/admin/vouchers", async (req, res) => {
+  const all = await Voucher.find().sort({ _id: -1 });
+  res.json(all);
+});
+
+// =====================
+// SIMPLE STATUS CHECK
+// =====================
+app.get("/", (req, res) => {
+  res.send("XOUNNET ISP SYSTEM ACTIVE");
 });
 
 // =====================
 app.listen(process.env.PORT || 3000, () =>
-  console.log("XOUNNET running")
+  console.log("XOUNNET ISP READY")
 );
