@@ -1,6 +1,5 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const axios = require("axios");
 
 const app = express();
 app.use(express.json());
@@ -13,16 +12,20 @@ mongoose.connect(process.env.MONGO_URL)
   .catch(err => console.log(err));
 
 // =====================
-// MICROTIK CONFIG
+// VOUCHER MODEL
 // =====================
-const MIKROTIK = {
-  host: "http://192.168.88.1",
-  user: "admin",
-  pass: "admin"
-};
+const VoucherSchema = new mongoose.Schema({
+  code: String,
+  phone: String,
+  amount: Number,
+  expiry: Date,
+  used: { type: Boolean, default: false }
+});
+
+const Voucher = mongoose.model("Voucher", VoucherSchema);
 
 // =====================
-// PLANS (XOUNNET)
+// PLANS
 // =====================
 const plans = {
   500: 3 * 60 * 60 * 1000,
@@ -32,182 +35,200 @@ const plans = {
 };
 
 // =====================
-// MODELS
-// =====================
-const SessionSchema = new mongoose.Schema({
-  code: String,
-  username: String,
-  password: String,
-  expiry: Date,
-  active: { type: Boolean, default: false }
-});
-
-const Session = mongoose.model("Session", SessionSchema);
-
-// =====================
-// MICROTIK FUNCTIONS
-// =====================
-async function addHotspotUser(username, password, limit) {
-  try {
-    await axios.get(`${MIKROTIK.host}/rest/ip/hotspot/user/add`, {
-      params: {
-        name: username,
-        password: password,
-        "limit-uptime": limit
-      },
-      auth: {
-        username: MIKROTIK.user,
-        password: MIKROTIK.pass
-      }
-    });
-  } catch (err) {
-    console.log("MikroTik error:", err.message);
-  }
-}
-
-async function removeHotspotUser(username) {
-  try {
-    await axios.get(`${MIKROTIK.host}/rest/ip/hotspot/user/remove`, {
-      params: { name: username },
-      auth: {
-        username: MIKROTIK.user,
-        password: MIKROTIK.pass
-      }
-    });
-  } catch (err) {
-    console.log("Remove error:", err.message);
-  }
-}
-
-// =====================
-// PORTAL UI
+// FRONTEND
 // =====================
 app.get("/", (req, res) => {
   res.send(`
-  <html>
-  <head>
-    <title>XOUNNET</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-      body { font-family: Arial; background:#0f2027; color:white; text-align:center; }
-      .box { margin:20px; padding:20px; background:rgba(255,255,255,0.1); border-radius:10px; }
-      input, button { padding:12px; width:80%; margin:8px; border:none; border-radius:5px; }
-      button { background:#00c853; color:white; }
-      .plan { background:#ff9800; }
-    </style>
-  </head>
-  <body>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>XOUNNET</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <h1>XOUNNET</h1>
-    <p>Built for connection</p>
+  <style>
+    body {
+      margin:0;
+      font-family: Arial;
+      background: linear-gradient(120deg,#0f2027,#203a43,#2c5364);
+      color:white;
+      text-align:center;
+    }
 
-    <div class="box">
-      <input id="code" placeholder="Enter Voucher Code"><br>
-      <button onclick="redeem()">Connect</button>
-    </div>
+    .box {
+      max-width:400px;
+      margin:auto;
+      padding:20px;
+    }
 
-    <p id="msg"></p>
+    .card {
+      background: rgba(255,255,255,0.1);
+      padding:15px;
+      margin:15px 0;
+      border-radius:10px;
+    }
 
-    <script>
-      function redeem(){
-        fetch("/redeem",{
-          method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({code:code.value})
-        })
-        .then(r=>r.json())
-        .then(d=>{
-          msg.innerText = d.message;
-        });
-      }
-    </script>
+    button {
+      width:100%;
+      padding:12px;
+      margin:6px 0;
+      border:none;
+      border-radius:8px;
+      background:#00c853;
+      color:white;
+      font-size:15px;
+    }
 
-  </body>
-  </html>
+    .plan {
+      background:#ff9800;
+    }
+
+    input {
+      width:90%;
+      padding:12px;
+      border:none;
+      border-radius:8px;
+      margin:6px 0;
+      text-align:center;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="box">
+
+  <h1>XOUNNET</h1>
+  <p>Built for connection</p>
+
+  <!-- STEP 1 -->
+  <div class="card" id="step1">
+    <h3>Select Package</h3>
+
+    <button class="plan" onclick="select(500,'3 Hours')">3 Hours - 500</button>
+    <button class="plan" onclick="select(1000,'24 Hours')">24 Hours - 1000</button>
+    <button class="plan" onclick="select(2500,'3 Days')">3 Days - 2500</button>
+    <button class="plan" onclick="select(4000,'7 Days')">7 Days - 4000</button>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="card" id="step2" style="display:none">
+    <h3>Payment</h3>
+    <p>Send money to:</p>
+    <b>Airtel / MTN: 4404970</b>
+
+    <p id="planText"></p>
+
+    <input id="phone" placeholder="Phone used to pay">
+
+    <button onclick="createVoucher()">Confirm Payment</button>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="card" id="step3" style="display:none">
+    <h3>Your Voucher</h3>
+    <p id="voucherText"></p>
+
+    <input id="voucher" placeholder="Enter voucher">
+
+    <button onclick="redeem()">Connect</button>
+  </div>
+
+  <p id="msg"></p>
+
+</div>
+
+<script>
+let amount = 0;
+let name = "";
+
+function select(a,n){
+  amount = a;
+  name = n;
+
+  document.getElementById("step1").style.display="none";
+  document.getElementById("step2").style.display="block";
+
+  document.getElementById("planText").innerText = n + " - " + a;
+}
+
+function createVoucher(){
+  fetch("/create",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      amount: amount,
+      phone: document.getElementById("phone").value
+    })
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    document.getElementById("step2").style.display="none";
+    document.getElementById("step3").style.display="block";
+
+    document.getElementById("voucherText").innerText = d.code;
+    msg.innerText = "Voucher created";
+  });
+}
+
+function redeem(){
+  fetch("/redeem",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({code: voucher.value})
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    msg.innerText = d.message;
+  });
+}
+</script>
+
+</body>
+</html>
   `);
 });
 
 // =====================
-// REDEEM VOUCHER → MICROTIK LOGIN
-// =====================
-app.post("/redeem", async (req, res) => {
-  const { code } = req.body;
-
-  const session = await Session.findOne({ code });
-
-  if (!session) return res.json({ message: "Invalid voucher" });
-  if (session.active) return res.json({ message: "Already used" });
-  if (new Date() > session.expiry) return res.json({ message: "Expired" });
-
-  session.active = true;
-  await session.save();
-
-  const limit = "3h";
-
-  await addHotspotUser(
-    session.username,
-    session.password,
-    limit
-  );
-
-  res.json({
-    message: "Access granted",
-    login: {
-      username: session.username,
-      password: session.password
-    }
-  });
-});
-
-// =====================
-// CREATE SESSION (FROM PAYMENT/SMS)
+// CREATE VOUCHER
 // =====================
 app.post("/create", async (req, res) => {
-  const { amount } = req.body;
+  const { amount, phone } = req.body;
 
   const duration = plans[amount];
   if (!duration) return res.json({ message: "Invalid plan" });
 
   const code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-  const username = code;
-  const password = code + "X";
-
-  const expiry = new Date(Date.now() + duration);
-
-  await Session.create({
+  await Voucher.create({
     code,
-    username,
-    password,
-    expiry
+    phone,
+    amount,
+    expiry: new Date(Date.now() + duration)
   });
 
-  res.json({
-    message: "Voucher created",
-    code
-  });
+  res.json({ code });
 });
 
 // =====================
-// AUTO CLEAN EXPIRED SESSIONS
+// REDEEM
 // =====================
-setInterval(async () => {
-  const now = new Date();
+app.post("/redeem", async (req, res) => {
+  const { code } = req.body;
 
-  const expired = await Session.find({
-    expiry: { $lt: now },
-    active: true
-  });
+  const voucher = await Voucher.findOne({ code });
 
-  for (let s of expired) {
-    await removeHotspotUser(s.username);
-    s.active = false;
-    await s.save();
-  }
+  if (!voucher) return res.json({ message: "Invalid voucher" });
+  if (voucher.used) return res.json({ message: "Already used" });
+  if (new Date() > voucher.expiry)
+    return res.json({ message: "Expired" });
 
-}, 60000);
+  voucher.used = true;
+  await voucher.save();
+
+  res.json({ message: "Access granted 🚀" });
+});
 
 // =====================
 app.listen(process.env.PORT || 3000, () =>
-  console.log("XOUNNET ISP SYSTEM RUNNING")
+  console.log("XOUNNET running")
 );
