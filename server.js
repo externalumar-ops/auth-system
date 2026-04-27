@@ -4,12 +4,12 @@ const mongoose = require("mongoose");
 const app = express();
 app.use(express.json());
 
-// ===================== DB =====================
+// ================= DB =================
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log("DB CONNECTED"))
-  .catch(err => console.log("DB ERROR", err));
+  .catch(err => console.log(err));
 
-// ===================== MODEL =====================
+// ================= MODEL =================
 const VoucherSchema = new mongoose.Schema({
   code: String,
   phone: String,
@@ -20,7 +20,7 @@ const VoucherSchema = new mongoose.Schema({
 
 const Voucher = mongoose.model("Voucher", VoucherSchema);
 
-// ===================== PLANS =====================
+// ================= PLANS =================
 const plans = {
   500: 3 * 60 * 60 * 1000,
   1000: 24 * 60 * 60 * 1000,
@@ -28,7 +28,7 @@ const plans = {
   4000: 7 * 24 * 60 * 60 * 1000
 };
 
-// ===================== FRONTEND =====================
+// ================= FRONTEND =================
 app.get("/", (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -41,35 +41,44 @@ app.get("/", (req, res) => {
 body{
   margin:0;
   font-family:Arial;
-  background:#0f2027;
+  background:#0b1c26;
   color:white;
+  height:100vh;
+  overflow:hidden;
   display:flex;
   justify-content:center;
   align-items:center;
-  height:100vh;
 }
 
-.box{width:90%;max-width:360px}
+.container{
+  width:92%;
+  max-width:360px;
+}
 
 .card{
-  background:rgba(255,255,255,0.1);
+  background:rgba(255,255,255,0.08);
   padding:12px;
   margin:8px 0;
-  border-radius:10px;
+  border-radius:12px;
 }
 
 button{
   width:100%;
   padding:10px;
-  margin:5px 0;
+  margin:4px 0;
   border:none;
   border-radius:8px;
   background:#00c853;
   color:white;
 }
 
-.plan{background:#444}
-.plan.active{background:#ff9800}
+.plan{
+  background:#333;
+}
+
+.plan.active{
+  background:#ff9800;
+}
 
 input{
   width:92%;
@@ -80,58 +89,78 @@ input{
   text-align:center;
 }
 
-.hidden{display:none}
+h2,h3,p{margin:5px 0}
+
+#payBox{
+  font-size:14px;
+  line-height:1.4;
+  color:#ddd;
+}
 </style>
 </head>
 
 <body>
 
-<div class="box">
+<div class="container">
 
-<h2>XOUNNET</h2>
-<p>Built for connection</p>
+<h2 style="text-align:center">XOUNNET</h2>
+<p style="text-align:center;font-size:12px">Built for connection</p>
 
+<!-- PACKAGE -->
 <div class="card">
 <h3>Select Package</h3>
 
-<button class="plan" onclick="select(500,this)">3H - 500</button>
-<button class="plan" onclick="select(1000,this)">24H - 1000</button>
-<button class="plan" onclick="select(2500,this)">3D - 2500</button>
-<button class="plan" onclick="select(4000,this)">7D - 4000</button>
+<button class="plan" onclick="select(500,this)">3 Hours - 500</button>
+<button class="plan" onclick="select(1000,this)">24 Hours - 1000</button>
+<button class="plan" onclick="select(2500,this)">3 Days - 2500</button>
+<button class="plan" onclick="select(4000,this)">7 Days - 4000</button>
 </div>
 
+<!-- PAYMENT -->
 <div class="card">
-<h3>Payment</h3>
-<p>Send to: <b>4404970</b></p>
+<h3>Payment Instructions</h3>
+
+<div id="payBox">
+Select a package to see instructions
+</div>
 
 <input id="phone" placeholder="Phone used to pay">
 
-<button onclick="create()">Get Voucher</button>
+<button onclick="createVoucher()">Generate Voucher</button>
 </div>
 
+<!-- VOUCHER -->
 <div class="card">
 <h3>Enter Voucher</h3>
+
 <input id="code" placeholder="Voucher code">
 <button onclick="redeem()">Connect</button>
 </div>
 
-<p id="msg"></p>
+<p id="msg" style="text-align:center"></p>
 
 </div>
 
 <script>
 
 let amount = 500;
-let activeBtn = null;
+let active = null;
 
+// package select
 function select(a,btn){
   amount = a;
-  if(activeBtn) activeBtn.classList.remove("active");
+
+  if(active) active.classList.remove("active");
   btn.classList.add("active");
-  activeBtn = btn;
+  active = btn;
+
+  document.getElementById("payBox").innerHTML =
+    "Dial:<br><b>*185*9*4404970*" + a + "*REF*PIN#</b><br><br>" +
+    "Confirm payment then enter phone number.";
 }
 
-function create(){
+// create voucher
+function createVoucher(){
   fetch("/create",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
@@ -146,11 +175,14 @@ function create(){
   });
 }
 
+// redeem
 function redeem(){
   fetch("/redeem",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({code:document.getElementById("code").value})
+    body:JSON.stringify({
+      code:document.getElementById("code").value
+    })
   })
   .then(r=>r.json())
   .then(d=>{
@@ -165,11 +197,11 @@ function redeem(){
   `);
 });
 
-// ===================== CREATE =====================
+// ================= CREATE =================
 app.post("/create", async (req, res) => {
   const { phone, amount } = req.body;
 
-  const code = "VCH-" + Math.random().toString(36).substring(2, 7).toUpperCase();
+  const code = "VCH-" + Math.random().toString(36).substring(2,7).toUpperCase();
 
   await Voucher.create({
     code,
@@ -181,7 +213,7 @@ app.post("/create", async (req, res) => {
   res.json({ code });
 });
 
-// ===================== REDEEM =====================
+// ================= REDEEM =================
 app.post("/redeem", async (req, res) => {
   const { code } = req.body;
 
@@ -197,7 +229,7 @@ app.post("/redeem", async (req, res) => {
   res.json({ message: "ACCESS GRANTED 🚀" });
 });
 
-// =====================
+// ================= START =================
 app.listen(process.env.PORT || 3000, () =>
-  console.log("XOUNNET FULL SYSTEM RUNNING")
+  console.log("XOUNNET CLEAN PORTAL RUNNING")
 );
