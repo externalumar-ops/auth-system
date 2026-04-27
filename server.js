@@ -1,31 +1,28 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const axios = require("axios");
 
 const app = express();
 app.use(express.json());
 
 // =====================
-// DB
+// DATABASE
 // =====================
 mongoose.connect(process.env.MONGO_URL)
-  .then(() => console.log("DB Connected"))
+  .then(() => console.log("MongoDB Connected"))
   .catch(err => console.log(err));
 
 // =====================
-// VOUCHER MODEL
+// MICROTIK CONFIG
 // =====================
-const VoucherSchema = new mongoose.Schema({
-  code: String,
-  phone: String,
-  amount: Number,
-  expiry: Date,
-  used: { type: Boolean, default: false }
-});
-
-const Voucher = mongoose.model("Voucher", VoucherSchema);
+const MIKROTIK = {
+  host: "http://192.168.88.1",
+  user: "admin",
+  pass: "admin"
+};
 
 // =====================
-// PRICE PLAN MAP
+// PLANS (XOUNNET)
 // =====================
 const plans = {
   500: 3 * 60 * 60 * 1000,
@@ -35,107 +32,79 @@ const plans = {
 };
 
 // =====================
-// UTILITY: CLEAN PHONE
+// MODELS
 // =====================
-function normalizePhone(phone) {
-  if (!phone) return "";
-  return phone.replace(/\s/g, "");
+const SessionSchema = new mongoose.Schema({
+  code: String,
+  username: String,
+  password: String,
+  expiry: Date,
+  active: { type: Boolean, default: false }
+});
+
+const Session = mongoose.model("Session", SessionSchema);
+
+// =====================
+// MICROTIK FUNCTIONS
+// =====================
+async function addHotspotUser(username, password, limit) {
+  try {
+    await axios.get(`${MIKROTIK.host}/rest/ip/hotspot/user/add`, {
+      params: {
+        name: username,
+        password: password,
+        "limit-uptime": limit
+      },
+      auth: {
+        username: MIKROTIK.user,
+        password: MIKROTIK.pass
+      }
+    });
+  } catch (err) {
+    console.log("MikroTik error:", err.message);
+  }
+}
+
+async function removeHotspotUser(username) {
+  try {
+    await axios.get(`${MIKROTIK.host}/rest/ip/hotspot/user/remove`, {
+      params: { name: username },
+      auth: {
+        username: MIKROTIK.user,
+        password: MIKROTIK.pass
+      }
+    });
+  } catch (err) {
+    console.log("Remove error:", err.message);
+  }
 }
 
 // =====================
-// MAIN SMS PAYMENT VERIFICATION
-// =====================
-// EXPECTED SMS FORMAT (from MTN/AIRTEL):
-// "You have sent UGX 500 to 4404970. Ref: ABC123. Phone: 2567XXXXXXX"
-app.post("/sms-webhook", async (req, res) => {
-  const { message } = req.body;
-
-  if (!message) return res.json({ status: "no message" });
-
-  const text = message.toLowerCase();
-
-  // detect merchant code
-  if (!text.includes("4404970")) {
-    return res.json({ status: "ignored - wrong merchant" });
-  }
-
-  // extract amount
-  let amount = 0;
-  if (text.includes("500")) amount = 500;
-  if (text.includes("1000")) amount = 1000;
-  if (text.includes("2500")) amount = 2500;
-  if (text.includes("4000")) amount = 4000;
-
-  if (!amount) {
-    return res.json({ status: "invalid amount" });
-  }
-
-  // extract phone number (basic pattern)
-  const phoneMatch = message.match(/256\d{8}/);
-  const phone = phoneMatch ? normalizePhone(phoneMatch[0]) : "unknown";
-
-  // generate voucher
-  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-  const expiry = new Date(Date.now() + plans[amount]);
-
-  await Voucher.create({
-    code,
-    phone,
-    amount,
-    expiry
-  });
-
-  res.json({
-    status: "voucher issued",
-    code,
-    amount,
-    phone
-  });
-});
-
-// =====================
-// VERIFY VOUCHER
-// =====================
-app.post("/redeem", async (req, res) => {
-  const { code } = req.body;
-
-  const voucher = await Voucher.findOne({ code });
-
-  if (!voucher) return res.json({ message: "Invalid voucher" });
-  if (voucher.used) return res.json({ message: "Already used" });
-  if (new Date() > voucher.expiry) return res.json({ message: "Expired voucher" });
-
-  voucher.used = true;
-  await voucher.save();
-
-  res.json({
-    message: "Access granted",
-    plan: voucher.amount
-  });
-});
-
-// =====================
-// ADMIN CHECK PAYMENTS
-// =====================
-app.get("/admin/vouchers", async (req, res) => {
-  const all = await Voucher.find().sort({ _id: -1 });
-  res.json(all);
-});
-
-// =====================
-// PORTAL (OPTIONAL SIMPLE UI)
+// PORTAL UI
 // =====================
 app.get("/", (req, res) => {
   res.send(`
   <html>
-  <body style="font-family:Arial;text-align:center;background:#111;color:#fff;padding:30px">
+  <head>
+    <title>XOUNNET</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+      body { font-family: Arial; background:#0f2027; color:white; text-align:center; }
+      .box { margin:20px; padding:20px; background:rgba(255,255,255,0.1); border-radius:10px; }
+      input, button { padding:12px; width:80%; margin:8px; border:none; border-radius:5px; }
+      button { background:#00c853; color:white; }
+      .plan { background:#ff9800; }
+    </style>
+  </head>
+  <body>
 
     <h1>XOUNNET</h1>
     <p>Built for connection</p>
 
-    <input id="code" placeholder="Enter Voucher Code" style="padding:10px;width:80%"><br><br>
-
-    <button onclick="redeem()" style="padding:10px;width:85%">Connect</button>
+    <div class="box">
+      <input id="code" placeholder="Enter Voucher Code"><br>
+      <button onclick="redeem()">Connect</button>
+    </div>
 
     <p id="msg"></p>
 
@@ -147,7 +116,9 @@ app.get("/", (req, res) => {
           body:JSON.stringify({code:code.value})
         })
         .then(r=>r.json())
-        .then(d=>msg.innerText=d.message)
+        .then(d=>{
+          msg.innerText = d.message;
+        });
       }
     </script>
 
@@ -157,4 +128,86 @@ app.get("/", (req, res) => {
 });
 
 // =====================
-app.listen(process.env.PORT || 3000);
+// REDEEM VOUCHER → MICROTIK LOGIN
+// =====================
+app.post("/redeem", async (req, res) => {
+  const { code } = req.body;
+
+  const session = await Session.findOne({ code });
+
+  if (!session) return res.json({ message: "Invalid voucher" });
+  if (session.active) return res.json({ message: "Already used" });
+  if (new Date() > session.expiry) return res.json({ message: "Expired" });
+
+  session.active = true;
+  await session.save();
+
+  const limit = "3h";
+
+  await addHotspotUser(
+    session.username,
+    session.password,
+    limit
+  );
+
+  res.json({
+    message: "Access granted",
+    login: {
+      username: session.username,
+      password: session.password
+    }
+  });
+});
+
+// =====================
+// CREATE SESSION (FROM PAYMENT/SMS)
+// =====================
+app.post("/create", async (req, res) => {
+  const { amount } = req.body;
+
+  const duration = plans[amount];
+  if (!duration) return res.json({ message: "Invalid plan" });
+
+  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+  const username = code;
+  const password = code + "X";
+
+  const expiry = new Date(Date.now() + duration);
+
+  await Session.create({
+    code,
+    username,
+    password,
+    expiry
+  });
+
+  res.json({
+    message: "Voucher created",
+    code
+  });
+});
+
+// =====================
+// AUTO CLEAN EXPIRED SESSIONS
+// =====================
+setInterval(async () => {
+  const now = new Date();
+
+  const expired = await Session.find({
+    expiry: { $lt: now },
+    active: true
+  });
+
+  for (let s of expired) {
+    await removeHotspotUser(s.username);
+    s.active = false;
+    await s.save();
+  }
+
+}, 60000);
+
+// =====================
+app.listen(process.env.PORT || 3000, () =>
+  console.log("XOUNNET ISP SYSTEM RUNNING")
+);
