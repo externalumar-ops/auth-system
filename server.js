@@ -6,7 +6,7 @@ app.use(express.json());
 
 // ===================== DB =====================
 mongoose.connect(process.env.MONGO_URL)
-  .then(() => console.log("DB Connected"))
+  .then(() => console.log("MongoDB Connected"))
   .catch(err => console.log(err));
 
 // ===================== MODEL =====================
@@ -28,169 +28,73 @@ const plans = {
   4000: 7 * 24 * 60 * 60 * 1000
 };
 
-// ===================== FRONTEND =====================
-app.get("/", (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<title>XOUNNET</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-
-<style>
-body{font-family:Arial;background:#0f2027;color:white;text-align:center}
-.box{max-width:420px;margin:auto;padding:20px}
-.card{background:rgba(255,255,255,0.1);padding:15px;margin:10px;border-radius:10px}
-button{width:100%;padding:12px;margin:6px;border:none;border-radius:8px;background:#00c853;color:white}
-input{width:90%;padding:12px;margin:6px;border-radius:8px;border:none;text-align:center}
-.plan{background:#ff9800}
-</style>
-</head>
-
-<body>
-
-<div class="box">
-
-<h2>XOUNNET</h2>
-<p>Built for connection</p>
-
-<!-- PAGE 1 -->
-<div id="page1">
-
-  <div class="card">
-    <h3>Select Package</h3>
-
-    <button class="plan" onclick="setPlan(500)">3 Hours - 500</button>
-    <button class="plan" onclick="setPlan(1000)">24 Hours - 1000</button>
-    <button class="plan" onclick="setPlan(2500)">3 Days - 2500</button>
-    <button class="plan" onclick="setPlan(4000)">7 Days - 4000</button>
-  </div>
-
-  <div class="card">
-    <h3>Payment Instructions</h3>
-    <p>Send to Airtel / MTN: <b>4404970</b></p>
-
-    <input id="phone" placeholder="Phone used to pay">
-
-    <button onclick="generate()">Confirm Payment</button>
-  </div>
-
-  <div class="card">
-    <h3>Enter Voucher</h3>
-    <input id="voucherInput" placeholder="Voucher code">
-    <button onclick="redeem()">Connect</button>
-  </div>
-
-</div>
-
-<!-- PAGE 2 -->
-<div id="page2" style="display:none">
-
-  <div class="card">
-    <h3>Your Voucher</h3>
-    <h2 id="voucherText"></h2>
-
-    <button onclick="back()">Back to Login</button>
-  </div>
-
-</div>
-
-<p id="msg"></p>
-
-</div>
-
-<script>
-
-let selectedAmount = 500;
-
-// select plan
-function setPlan(a){
-  selectedAmount = a;
-}
-
-// create voucher → go to page 2
-function generate(){
-  fetch("/create",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      amount:selectedAmount,
-      phone:document.getElementById("phone").value
-    })
-  })
-  .then(r=>r.json())
-  .then(d=>{
-
-    document.getElementById("page1").style.display="none";
-    document.getElementById("page2").style.display="block";
-
-    document.getElementById("voucherText").innerText = d.code;
-  });
-}
-
-// back to page 1
-function back(){
-  document.getElementById("page2").style.display="none";
-  document.getElementById("page1").style.display="block";
-}
-
-// redeem voucher
-function redeem(){
-  fetch("/redeem",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      code:document.getElementById("voucherInput").value
-    })
-  })
-  .then(r=>r.json())
-  .then(d=>{
-    msg.innerText = d.message;
-  });
-}
-
-</script>
-
-</body>
-</html>
-  `);
+// ===================== HEALTH CHECK =====================
+app.get("/health", (req, res) => {
+  res.json({ status: "OK" });
 });
 
 // ===================== CREATE VOUCHER =====================
 app.post("/create", async (req, res) => {
-  const { phone, amount } = req.body;
+  try {
+    const { phone, amount } = req.body;
 
-  const duration = plans[amount] || plans[500];
+    if (!phone) return res.json({ message: "Phone required" });
 
-  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const duration = plans[amount] || plans[500];
 
-  await Voucher.create({
-    code,
-    phone,
-    amount,
-    expiry: new Date(Date.now() + duration)
-  });
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-  res.json({ code });
+    await Voucher.create({
+      code,
+      phone,
+      amount: amount || 500,
+      expiry: new Date(Date.now() + duration)
+    });
+
+    return res.json({ code });
+  } catch (err) {
+    console.log(err);
+    return res.json({ message: "Server error" });
+  }
 });
 
-// ===================== REDEEM =====================
+// ===================== REDEEM VOUCHER =====================
 app.post("/redeem", async (req, res) => {
-  const { code } = req.body;
+  try {
+    const { code } = req.body;
 
-  const v = await Voucher.findOne({ code });
+    const voucher = await Voucher.findOne({ code });
 
-  if (!v) return res.json({ message: "Invalid voucher" });
-  if (v.used) return res.json({ message: "Already used" });
-  if (new Date() > v.expiry) return res.json({ message: "Expired" });
+    if (!voucher) return res.json({ message: "Invalid voucher" });
+    if (voucher.used) return res.json({ message: "Already used" });
+    if (new Date() > voucher.expiry)
+      return res.json({ message: "Expired voucher" });
 
-  v.used = true;
-  await v.save();
+    voucher.used = true;
+    await voucher.save();
 
-  res.json({ message: "Access granted 🚀" });
+    return res.json({
+      message: "Access granted 🚀",
+      plan: voucher.amount
+    });
+  } catch (err) {
+    console.log(err);
+    return res.json({ message: "Server error" });
+  }
+});
+
+// ===================== LIST (DEBUG) =====================
+app.get("/vouchers", async (req, res) => {
+  const all = await Voucher.find().sort({ _id: -1 });
+  res.json(all);
+});
+
+// ===================== ROOT =====================
+app.get("/", (req, res) => {
+  res.send("XOUNNET BACKEND RUNNING ✔");
 });
 
 // =====================
 app.listen(process.env.PORT || 3000, () =>
-  console.log("XOUNNET FINAL FLOW RUNNING")
+  console.log("XOUNNET SYSTEM RUNNING")
 );
