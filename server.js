@@ -1,6 +1,5 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
 
 const app = express();
 app.use(express.json());
@@ -13,28 +12,31 @@ mongoose.connect(process.env.MONGO_URL)
   .catch(err => console.log(err));
 
 // =====================
-// USER MODEL
+// VOUCHER MODEL
 // =====================
-const UserSchema = new mongoose.Schema({
-  username: String,
-  password: String,
-  expiry: Date
+const VoucherSchema = new mongoose.Schema({
+  code: String,
+  expiry: Date,
+  used: {
+    type: Boolean,
+    default: false
+  }
 });
 
-const User = mongoose.model("User", UserSchema);
+const Voucher = mongoose.model("Voucher", VoucherSchema);
 
 // =====================
-// TIME PLANS
+// PLANS
 // =====================
 const plans = {
-  "3h": 3 * 60 * 60 * 1000,
-  "24h": 24 * 60 * 60 * 1000,
-  "3d": 3 * 24 * 60 * 60 * 1000,
-  "7d": 7 * 24 * 60 * 60 * 1000
+  "500": 3 * 60 * 60 * 1000,
+  "1000": 24 * 60 * 60 * 1000,
+  "2500": 3 * 24 * 60 * 60 * 1000,
+  "4000": 7 * 24 * 60 * 60 * 1000
 };
 
 // =====================
-// HOME (PORTAL)
+// PORTAL
 // =====================
 app.get("/", (req, res) => {
   res.send(`
@@ -104,24 +106,16 @@ app.get("/", (req, res) => {
     <div class="slogan">Built for connection</div>
 
     <div class="card">
-      <input id="username" placeholder="Username"><br>
-      <input id="password" type="password" placeholder="Password"><br>
-
-      <button onclick="register()">Register</button>
-      <button onclick="login()">Login</button>
+      <input id="code" placeholder="Enter Voucher Code"><br>
+      <button onclick="redeem()">Connect</button>
     </div>
 
     <div class="card plans">
-      <h3>Select Plan</h3>
-
-      <button class="plan" onclick="pay('3h')">3 Hours - UGX 500</button>
-      <button class="plan" onclick="pay('24h')">24 Hours - UGX 1000</button>
-      <button class="plan" onclick="pay('3d')">3 Days - UGX 2500</button>
-      <button class="plan" onclick="pay('7d')">7 Days - UGX 4000</button>
-    </div>
-
-    <div class="card">
-      <button onclick="check()">Check Access</button>
+      <h3>Buy Plan</h3>
+      <button class="plan">3 Hours - UGX 500</button>
+      <button class="plan">24 Hours - UGX 1000</button>
+      <button class="plan">3 Days - UGX 2500</button>
+      <button class="plan">7 Days - UGX 4000</button>
     </div>
 
     <p id="msg"></p>
@@ -129,41 +123,14 @@ app.get("/", (req, res) => {
     <script>
       const API = window.location.origin;
 
-      function register() {
-        fetch(API + "/register", {
+      function redeem() {
+        fetch(API + "/redeem", {
           method: "POST",
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({
-            username: username.value,
-            password: password.value
+            code: code.value
           })
-        }).then(r=>r.json()).then(d=>msg.innerText=d.message);
-      }
-
-      function login() {
-        fetch(API + "/login", {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({
-            username: username.value,
-            password: password.value
-          })
-        }).then(r=>r.json()).then(d=>msg.innerText=d.message);
-      }
-
-      function pay(plan) {
-        fetch(API + "/pay", {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({
-            username: username.value,
-            plan: plan
-          })
-        }).then(r=>r.json()).then(d=>msg.innerText=d.message);
-      }
-
-      function check() {
-        fetch(API + "/check?username=" + username.value)
+        })
         .then(r=>r.json())
         .then(d=>msg.innerText=d.message);
       }
@@ -175,67 +142,47 @@ app.get("/", (req, res) => {
 });
 
 // =====================
-// REGISTER
+// REDEEM VOUCHER
 // =====================
-app.post("/register", async (req, res) => {
-  const { username, password } = req.body;
+app.post("/redeem", async (req, res) => {
+  const { code } = req.body;
 
-  const existing = await User.findOne({ username });
-  if (existing) return res.json({ message: "User exists" });
+  const voucher = await Voucher.findOne({ code });
 
-  const hash = await bcrypt.hash(password, 10);
+  if (!voucher)
+    return res.json({ message: "Invalid code" });
 
-  await new User({ username, password: hash }).save();
+  if (voucher.used)
+    return res.json({ message: "Voucher already used" });
 
-  res.json({ message: "Registered successfully" });
+  if (voucher.expiry && new Date() > voucher.expiry)
+    return res.json({ message: "Voucher expired" });
+
+  voucher.used = true;
+  await voucher.save();
+
+  res.json({ message: "Access granted 🚀" });
 });
 
 // =====================
-// LOGIN
+// ADMIN: CREATE VOUCHER
 // =====================
-app.post("/login", async (req, res) => {
-  const { username, password } = req.body;
+app.get("/generate/:amount", async (req, res) => {
+  const amount = req.params.amount;
 
-  const user = await User.findOne({ username });
-  if (!user) return res.json({ message: "User not found" });
+  const duration = plans[amount];
+  if (!duration) return res.json({ message: "Invalid plan" });
 
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) return res.json({ message: "Wrong password" });
+  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-  res.json({ message: "Login success" });
-});
+  const expiry = new Date(Date.now() + duration);
 
-// =====================
-// PAY (SET EXPIRY)
-// =====================
-app.post("/pay", async (req, res) => {
-  const { username, plan } = req.body;
+  await new Voucher({ code, expiry }).save();
 
-  const user = await User.findOne({ username });
-  if (!user) return res.json({ message: "User not found" });
-
-  const duration = plans[plan];
-  const now = new Date();
-
-  user.expiry = new Date(now.getTime() + duration);
-  await user.save();
-
-  res.json({ message: "Plan activated" });
-});
-
-// =====================
-// CHECK ACCESS
-// =====================
-app.get("/check", async (req, res) => {
-  const user = await User.findOne({ username: req.query.username });
-
-  if (!user || !user.expiry)
-    return res.json({ message: "No active plan" });
-
-  if (new Date() > user.expiry)
-    return res.json({ message: "Plan expired" });
-
-  res.json({ message: "Access granted" });
+  res.json({
+    code,
+    expires: expiry
+  });
 });
 
 // =====================
